@@ -48,7 +48,6 @@ df_c_l <-
 
 describe_columns_c_l <-
   function(df, order = "large", cut = "max", nmax = 5, nmin = 5, cum_sum = NA) {
-    
     df <-
       df %>%
       pivot_longer(
@@ -62,7 +61,7 @@ describe_columns_c_l <-
         percent = nr / sum(nr),
         nr_unique = length(unique(value))
       )
-    
+
     if (order == "large") {
       df <- df %>% arrange(desc(nr), .by_group = T)
     } else if (order == "small") {
