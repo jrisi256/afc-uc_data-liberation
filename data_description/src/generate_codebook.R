@@ -37,15 +37,6 @@ names(afc_uc_table_list)[20] <- "UAC_SIR_FOLLOWUP_RPT_DATA_TABLE"
 ##                  Create descriptive tables.                  ##
 ##################################################################
 
-# Summarize character and logical columns
-df_c_l <-
-  afc_uc_table_list[[3]] %>%
-  select((where(is.character) | where(is.logical)) & !(matches("_ID"))) %>%
-  describe_columns_c_1()
-
-# df_n <- df %>% select(where(is.numeric))
-# date and time columns
-
 describe_columns_c_l <-
   function(df, order = "large", cut = "max", nmax = 5, nmin = 5, cum_sum = NA) {
     df <-
@@ -55,7 +46,7 @@ describe_columns_c_l <-
         names_to = "variable",
         values_to = "value"
       ) %>%
-      count(variable, value, name = nr) %>%
+      count(variable, value, name = "nr") %>%
       group_by(variable) %>%
       mutate(
         percent = nr / sum(nr),
@@ -74,6 +65,7 @@ describe_columns_c_l <-
       df <- df %>% filter(cumlative_percent <= cum_sum)
     } else if (cut == "max") {
       df <- df %>% slice_max(nr, n = nmax)
+      # df <- df %>% slice_max(nr, n = nmax, with_ties = F)
     } else if (cut == "min") {
       df <- df %>% slice_min(nr, n = nmin)
     } else if (cut == "min_max") {
@@ -85,5 +77,33 @@ describe_columns_c_l <-
     df <- df %>% ungroup()
   }
 
-hms::is_hms(afc_uc_table_list[[6]]$TIME_NOTIFIED)
-map(afc_uc_table_list, spec)
+# Summarize character and logical columns
+df_c_l <-
+  map(afc_uc_table_list, function(df) {
+    df <-
+      df %>%
+      select((where(is.character) | where(is.logical)) & !(matches("_ID")))
+
+    if (ncol(df) != 0) {
+      df <- describe_columns_c_l(df)
+    } else {
+      return(df %>% filter(F))
+    }
+  })
+
+pmap(list(df_c_l, names(df_c_l)), function(df, file_name) {
+  write_csv(df, here(paste0(file_name, "codebook.csv")))
+})
+
+# afc_uc_table_list[[3]] %>%
+# select((where(is.character) | where(is.logical)) & !(matches("_ID"))) %>%
+# describe_columns_c_1()
+
+# df_n <- df %>% select(where(is.numeric))
+# date and time columns
+
+# hms::is_hms(afc_uc_table_list[[6]]$TIME_NOTIFIED)
+# map(afc_uc_table_list, spec)
+
+# transform 0s and 1s into logical data type.
+# return empty data frames with column names?
