@@ -6,6 +6,10 @@ library(purrr)
 ##################################################################
 ##                         Read in data                         ##
 ##################################################################
+
+# import sas var1 var2 var3 using "data.sas7bdat", rowrange(1:1000)
+# import sas using "data.sas7bdat", rowrange(1:1000)
+
 input_data_dir <- here("data_description", "input")
 table_names <- str_replace(list.files(input_data_dir), ".csv", "")
 table_paths <- list.files(input_data_dir, full.names = T)
