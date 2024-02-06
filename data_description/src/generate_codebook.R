@@ -128,7 +128,7 @@ describe_columns_id <-
         nr_rows = n(),
         nr_unique = length(unique(value)),
         nr_missing = sum(is.na(value)),
-        prcnt_missing = round(sum(is.na(value)) / n(), digits = 3)
+        prop_missing = round(sum(is.na(value)) / n(), digits = 3)
       )
   }
 
@@ -171,7 +171,7 @@ describe_columns_n <-
         iqr = round(IQR(value, na.rm = T), digits = 3),
         mad = round(mad(value, na.rm = T), digits = 3),
         nr_missing = sum(is.na(value)),
-        prcnt_missing = round(sum(is.na(value)) / n(), digits = 3)
+        prop_missing = round(sum(is.na(value)) / n(), digits = 3)
       ) %>%
       ungroup()
   }
@@ -197,15 +197,106 @@ df_n <-
     }
   )
 
+#################################################################
+##     Create descriptive tables for dates and date times.     ##
+#################################################################
+describe_columns_date <- function(df) {
+  df <-
+    df %>%
+    pivot_longer(
+      cols = everything(), names_to = "variable", values_to = "value"
+    ) %>%
+    mutate(
+      date = mdy(value),
+      date_status =
+        case_when(
+          is.na(value) ~ NA,
+          is.na(mdy(value)) ~ "Parse failure",
+          !is.na(mdy(value)) ~ "Parse success"
+        )
+    )
+  
+  df_num <-
+    df %>%
+    group_by(variable) %>%
+    summarise(
+      min = min(date, na.rm = T),
+      p25 = quantile(date, probs = 0.25, na.rm = T, type = 1)[["25%"]],
+      median = median(date, na.rm = T),
+      p75 = quantile(date, probs = 0.75, na.rm = T, type = 1)[["75%"]],
+      max = max(date, na.rm = T),
+      nr_missing = sum(is.na(value)),
+      nr_failed_to_parse = sum(date_status == "Parse failure", na.rm = T),
+      prop_missing_or_fail = round(sum(is.na(date)) / n(), digits = 3)
+    )
+        
+    df_category <-
+      df %>%
+      mutate(
+        day = mday(date),
+        month = month(date),
+        year = year(date),
+        day_of_week = wday(date)
+      ) %>%
+      select(-date, -date_status, -value) %>%
+      pivot_longer(
+        cols = day:day_of_week,
+        names_to = "unit_of_time",
+        values_to = "value"
+      ) %>%
+      count(variable, unit_of_time, value, name = "nr") %>%
+      group_by(variable, unit_of_time) %>%
+      mutate(percent = nr / sum(nr)) %>%
+      ungroup()
+}
 
 
 
+a<-afc_uc_table_list[[3]] %>% select(DATE_CREATED) %>%
+  pivot_longer(
+    cols = everything(), names_to = "variable", values_to = "value"
+  ) %>%
+  mutate(
+    date = as_date(mdy_hm(value)),
+    date_status =
+      case_when(
+        is.na(value) ~ NA,
+        is.na(mdy_hm(value)) ~ "Parse failure",
+        !is.na(mdy_hm(value)) ~ "Parse success")
+  )
 
+df_num <-
+  a %>%
+  group_by(variable) %>%
+  summarise(
+    min = min(date, na.rm = T),
+    p25 = quantile(date, probs = 0.25, na.rm = T, type = 1)[["25%"]],
+    median = median(date, na.rm = T),
+    p75 = quantile(date, probs = 0.75, na.rm = T, type = 1)[["75%"]],
+    max = max(date, na.rm = T),
+    nr_missing = sum(is.na(value)),
+    nr_failed_to_parse = sum(date_status == "Parse failure", na.rm = T),
+    prop_missing_or_fail = round(sum(is.na(date)) / n(), digits = 3)
+  )
 
-
-
-
-
+df_category <-
+  a %>%
+  mutate(
+    day = mday(date),
+    month = month(date),
+    year = year(date),
+    day_of_week = wday(date)
+  ) %>%
+  select(-date, -date_status, -value) %>%
+  pivot_longer(
+    cols = day:day_of_week,
+    names_to = "unit_of_time",
+    values_to = "value"
+  ) %>%
+  count(variable, unit_of_time, value, name = "nr") %>%
+  group_by(variable, unit_of_time) %>%
+  mutate(prop = round(nr / sum(nr), digits = 3)) %>%
+  ungroup()
 
 
 # Write out results

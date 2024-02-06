@@ -65,9 +65,6 @@ join_a_b <-
   ) %>%
   mutate(id = "EVENT_ID")
 
-# merge 1:m a using b on EVENT_ID
-# rename EVENT_ID id
-
 join_analysis <-
   join_a_b %>%
   mutate(
@@ -90,50 +87,3 @@ join_analysis <-
     t2_missing = sum(t2_missing)
   )
 
-# merge m:1 join_a_b using b on EVENT_ID, nomatch
-# 
-# gen both_match = (source_x != . & source_y != .)
-# gen t1_match = (source_x != . & source_y == .)
-# gen t2_match = (source_x == . & source_y != .)
-# gen t1_missing = (source_x != . & EVENT_ID == .)
-# gen t2_missing = (source_y != . & EVENT_ID == .)
-# 
-# drop if missing(EVENT_ID)
-# 
-# g id = EVENT_ID
-# g nr_unique = _N
-# g t1 = unique(source_x)
-# g t2 = unique(source_y)
-# g nr_obs = _N
-# g both_match = sum(both_match)
-# g t1_only = sum(t1_match)
-# g t2_only = sum(t2_match)
-# g t1_missing = sum(t1_missing)
-# g t2_missing = sum(t2_missing)
-# 
-# summarize id, nr_unique, t1, t2, nr_obs, both_match, t1_only, t2_only, t1_missing, t2_missing
-
-# This code first merges the two datasets join_a_b and b on the EVENT_ID variable using a one-to-many merge. The m:1 option specifies that there can be multiple records in join_a_b for each record in b. The nomatch option specifies that records with missing values in the merge variable should be kept in the merged dataset and assigned a missing value for the merge variable.
-# 
-# The code then generates the following variables:
-#   
-#   both_match: A binary variable that indicates whether there is a match for both source.x and source.y for a given EVENT_ID.
-# t1_match: A binary variable that indicates whether there is a match for source.x but not source.y for a given EVENT_ID.
-# t2_match: A binary variable that indicates whether there is a match for source.y but not source.x for a given EVENT_ID.
-# t1_missing: A binary variable that indicates whether source.x is not missing but EVENT_ID is missing for a given EVENT_ID.
-# t2_missing: A binary variable that indicates whether source.y is not missing but EVENT_ID is missing for a given EVENT_ID.
-# 
-# The code then drops records with missing values in the EVENT_ID variable.
-# 
-# Finally, the code summarizes the data by calculating the following statistics:
-#   
-#   id: The unique values of the id variable.
-# nr_unique: The number of unique values of the EVENT_ID variable.
-# t1: The unique values of the source.x variable.
-# t2: The unique values of the source.y variable.
-# nr_obs: The number of observations in the dataset.
-# both_match: The sum of the both_match variable.
-# t1_only: The sum of the t1_match variable.
-# t2_only: The sum of the t2_match variable.
-# t1_missing: The sum of the t1_missing variable.
-# t2_missing: The sum of the t2_missing variable.
