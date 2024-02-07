@@ -30,7 +30,7 @@ sir_event_table <-
   )
 
 afc_uc_table_list <- append(afc_uc_table_list, list(sir_event_table))
-names(afc_uc_table_list)[20] <- "UAC_SIR_FOLLOWUP_RPT_DATA_TABLE"
+names(afc_uc_table_list)[20] <- "UAC_SIR_EVENT_DATA_TABL"
 
 # Change some of the column types from numeric to character.
 afc_uc_table_list$UAC_SIR_CATEGORY_DATA_TABLE <-

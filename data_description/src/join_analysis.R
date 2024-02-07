@@ -9,7 +9,6 @@ library(purrr)
 
 # import sas var1 var2 var3 using "data.sas7bdat", rowrange(1:1000)
 # import sas using "data.sas7bdat", rowrange(1:1000)
-
 input_data_dir <- here("data_description", "input")
 table_names <- str_replace(list.files(input_data_dir), ".csv", "")
 table_paths <- list.files(input_data_dir, full.names = T)
@@ -32,7 +31,7 @@ sir_event_table <-
   mutate(TIME_OF_EVENT_parse = parse_time(TIME_OF_EVENT, format = ""))
 
 afc_uc_table_list <- append(afc_uc_table_list, list(sir_event_table))
-names(afc_uc_table_list)[20] <- "UAC_SIR_FOLLOWUP_RPT_DATA_TABLE"
+names(afc_uc_table_list)[20] <- "UAC_SIR_EVENT_DATA_TABLE"
 
 #################################################################
 ##                   Analyze overlap in IDs.                   ##
@@ -41,49 +40,61 @@ afc_uc_table_list_ids <-
   map(
     afc_uc_table_list,
     function(df) {
-      df <- df %>% select((matches("_ID|CASE_NUMBER")))
+      df <- df %>% select((matches("_ID|CASE.*NUMBER")))
     }
   )
 
-fileConn <- file(here("output.txt"))
-writeLines(c("Hello","World"), fileConn)
-close(fileConn)
-
-a <-
-  afc_uc_table_list_ids$FOLLOW_UP_CONTACT_DATA_TABLE %>%
-  select(EVENT_ID) %>%
-  mutate(source = "FOLLOW_UP_CONTACT_DATA_TABLE")
-
-b <-
-  afc_uc_table_list_ids$ORR_NOTIFICATION_DATA_TABLE %>%
-  select(EVENT_ID) %>%
-  mutate(source = "ORR_NOTIFICATION_DATA_TABLE ")
-
-join_a_b <-
-  full_join(
-    a, b, by = "EVENT_ID", relationship = "many-to-many", na_matches = "never"
+test <-
+  pmap_dfr(
+    list(afc_uc_table_list_ids, names(afc_uc_table_list_ids)),
+    function(df, table_name) {
+      df %>%
+        slice(1) %>%
+        mutate(across(everything(), function(col) {col = T})) %>%
+        mutate(table = table_name) %>%
+        relocate(table)
+    }
   ) %>%
-  mutate(id = "EVENT_ID")
+  mutate(across(where(is.logical), function(col) {if_else(is.na(col), F, col)}))
 
-join_analysis <-
-  join_a_b %>%
-  mutate(
-    both_match = if_else(!is.na(source.x) & !is.na(source.y), 1, 0),
-    t1_match = if_else(!is.na(source.x) & is.na(source.y), 1, 0),
-    t2_match = if_else(is.na(source.x) & !is.na(source.y), 1, 0),
-    t1_missing = if_else(!is.na(source.x) & is.na(EVENT_ID), 1, 0),
-    t2_missing = if_else(!is.na(source.y) & is.na(EVENT_ID), 1, 0)
-  ) %>%
-  summarise(
-    id = unique(id),
-    nr_unique = length(unique(EVENT_ID)),
-    t1 = unique(na.omit(source.x)),
-    t2 = unique(na.omit(source.y)),
-    nr_obs = n(),
-    both_match = sum(both_match),
-    t1_only = sum(t1_match),
-    t2_only = sum(t2_match),
-    t1_missing = sum(t1_missing),
-    t2_missing = sum(t2_missing)
+test2 <-
+  map(
+    select(test, -table),
+    function(col) {
+      test %>% filter({{ col }}) %>% pull(table)
+    }
   )
 
+keep <- unlist(map(test2, function(x) length(x)))
+keep <- keep[keep > 1]
+keep <- as.list(names(keep))
+
+test3 <-
+  pmap(
+    list(test2[unlist(keep)], keep),
+    function(table_names, col_name) {
+      pmap(
+        list(afc_uc_table_list_ids[table_names], as.list(table_names)),
+        function(df, table_name) {
+          df %>%
+            select(all_of(col_name)) %>%
+            mutate(source = table_name, in_table = T) %>%
+            distinct(.data[[col_name]], .keep_all = T) %>%
+            pivot_wider(names_from = source, values_from = in_table)
+        }
+      ) %>%
+        reduce(function(df1, df2) {
+          full_join(df1, df2, by = col_name)
+        }) %>%
+        mutate(across(everything(), ~ if_else(is.na(.x), F, .x)))
+    }
+  )
+
+map(
+  test3[9],
+  function(df) {
+    print(ncol(df))
+    columns <- colnames(df)[2:ncol(df)]
+    upset(df, columns, width_ratio = 0.1)
+  }
+)
