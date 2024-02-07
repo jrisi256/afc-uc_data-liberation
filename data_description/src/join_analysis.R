@@ -90,11 +90,25 @@ test3 <-
     }
   )
 
-map(
-  test3[9],
-  function(df) {
-    print(ncol(df))
+pmap(
+  list(test3[8], names(test3[8])),
+  function(df, key_name) {
     columns <- colnames(df)[2:ncol(df)]
-    upset(df, columns, width_ratio = 0.1)
+    
+    upset(
+      df,
+      columns,
+      name = "Tables",
+      width_ratio = 0.1,
+      wrap = T,
+      set_sizes=(
+        upset_set_size() +
+          theme(
+            axis.text.x = element_text(angle = 90, size = 7),
+            axis.title.x = element_text(size = 6)
+          )
+      )
+    ) +
+      ggtitle(key_name)
   }
 )
