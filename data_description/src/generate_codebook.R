@@ -27,8 +27,7 @@ sir_event_table <-
   read_csv(
     file.path(input_data_dir, "UAC_SIR_EVENT_DATA_TABLE.csv"),
     col_types = list(TIME_OF_EVENT = "c")
-  ) %>%
-  mutate(TIME_OF_EVENT_parse = parse_time(TIME_OF_EVENT, format = ""))
+  )
 
 afc_uc_table_list <- append(afc_uc_table_list, list(sir_event_table))
 names(afc_uc_table_list)[20] <- "UAC_SIR_FOLLOWUP_RPT_DATA_TABLE"
@@ -100,9 +99,9 @@ df_c_l <-
         df %>%
         select(
           (where(is.character) |
-             where(is.logical) |
-             where(~ all(.x == 0 | .x == 1 | .x == 2, na.rm = T))) &
-            !(matches("_ID|CASE_NUMBER"))
+            where(is.logical) |
+            where(~ all(.x == 0 | .x == 1 | .x == 2, na.rm = T))) &
+            !(matches("_ID|CASE.*NUMBER|TIME|DATE_|_DATE$"))
         )
 
       if (ncol(df) != 0) {
@@ -121,7 +120,10 @@ describe_columns_id <-
     df <-
       df %>%
       pivot_longer(
-        cols = everything(), names_to = "variable", values_to = "value"
+        cols = everything(),
+        names_to = "variable",
+        values_to = "value",
+        values_transform = as.character
       ) %>%
       group_by(variable) %>%
       summarise(
@@ -137,8 +139,8 @@ df_id <-
   map(
     afc_uc_table_list,
     function(df) {
-      df <- df %>% select((matches("_ID|CASE_NUMBER")))
-      
+      df <- df %>% select((matches("_ID|CASE.*NUMBER")))
+
       if (ncol(df) != 0) {
         df <- describe_columns_id(df)
       } else {
@@ -185,10 +187,10 @@ df_n <-
         df %>%
         select(
           (where(is.numeric) &
-             where(~ any(.x != 0 & .x != 1 & .x != 2, na.rm = T))) &
+            where(~ any(.x != 0 & .x != 1 & .x != 2, na.rm = T))) &
             !(matches("_ID|CASE_NUMBER"))
         )
-      
+
       if (ncol(df) != 0) {
         df <- describe_columns_n(df)
       } else {
@@ -200,24 +202,102 @@ df_n <-
 #################################################################
 ##     Create descriptive tables for dates and date times.     ##
 #################################################################
-describe_columns_date <- function(df) {
+standardize_long_dates <- function(df, table_name) {
+  ######################## Combine these columns into one column.
+  if (all(c("DATE_NOTIFIED", "TIME_NOTIFIED") %in% colnames(df))) {
+    df <-
+      df %>%
+      mutate(
+        DATETIME_NOTIFIED =
+          ymd_hms(paste0(as_date(mdy_hm(DATE_NOTIFIED)), " ", TIME_NOTIFIED))
+      ) %>%
+      select(-DATE_NOTIFIED, -TIME_NOTIFIED)
+  }
+
+  if (all(c("DATE_EVENT", "TIME_EVENT") %in% colnames(df))) {
+    df <-
+      df %>%
+      mutate(
+        DATETIME_EVENT =
+          ymd_hms(paste0(as_date(mdy_hm(DATE_EVENT)), " ", TIME_EVENT))
+      ) %>%
+      select(-DATE_EVENT, -TIME_EVENT)
+  }
+
+  if (all(c("DATE_LAW_REPORT", "TIME_LAW_REPORT") %in% colnames(df))) {
+    df <-
+      df %>%
+      mutate(
+        DATETIME_LAW_REPORT =
+          ymd_hms(paste0(as_date(mdy_hm(DATE_LAW_REPORT)), " ", TIME_LAW_REPORT))
+      ) %>%
+      select(-DATE_LAW_REPORT, -TIME_LAW_REPORT)
+  }
+
+  if (all(c("DATE_OF_EVENT", "TIME_OF_EVENT") %in% colnames(df))) {
+    df <-
+      df %>%
+      mutate(
+        DATETIME_OF_EVENT =
+          ymd_hms(paste0(as_date(mdy_hm(DATE_OF_EVENT)), " ", TIME_OF_EVENT))
+      ) %>%
+      select(-DATE_OF_EVENT, -TIME_OF_EVENT)
+  }
+
+  if (all(c("DATE_STATE_REPORT", "TIME_STATE_REPORT") %in% colnames(df))) {
+    df <-
+      df %>%
+      mutate(
+        DATETIME_STATE_REPORT =
+          ymd_hms(paste0(as_date(mdy_hm(DATE_STATE_REPORT)), " ", TIME_STATE_REPORT))
+      ) %>%
+      select(-DATE_STATE_REPORT, -TIME_STATE_REPORT)
+  }
+
+  ######################## Make the date and time columns long.
   df <-
     df %>%
     pivot_longer(
-      cols = everything(), names_to = "variable", values_to = "value"
+      cols = everything(),
+      names_to = "variable",
+      values_to = "value",
+      values_transform = as.character
     ) %>%
     mutate(
-      date = mdy(value),
+      date =
+        case_when(
+          is.na(value) ~ NA_Date_,
+          str_detect(variable, "DATE_CONTACT|TIME") ~ ymd_hms(value),
+          str_detect(variable, "DATE_CREATED") & table_name == "PROGRAM_LEVEL_EVENTS_INFO_DATA_TABLE" ~ ymd_hms(value),
+          str_detect(variable, "DATE") ~ parse_date_time(value, "%m/%d/%y %H:%M", exact = T)
+        ),
       date_status =
         case_when(
-          is.na(value) ~ NA,
-          is.na(mdy(value)) ~ "Parse failure",
-          !is.na(mdy(value)) ~ "Parse success"
+          is.na(value) ~ NA_character_,
+          !is.na(value) & is.na(date) ~ "Parse failed.",
+          !is.na(date) ~ "Parse succeeded"
         )
     )
-  
-  df_num <-
-    df %>%
+}
+
+df_dates_std_long <-
+  pmap(
+    list(afc_uc_table_list, names(afc_uc_table_list)),
+    function(df, table_name) {
+      df <-
+        df %>%
+        select(matches("TIME|DATE_|_DATE$"))
+
+      if (ncol(df) != 0) {
+        df <- standardize_long_dates(df, table_name)
+      } else {
+        return(df %>% filter(F))
+      }
+    }
+  )
+
+describe_columns_num <- function(df) {
+  df %>%
     group_by(variable) %>%
     summarise(
       min = min(date, na.rm = T),
@@ -226,78 +306,75 @@ describe_columns_date <- function(df) {
       p75 = quantile(date, probs = 0.75, na.rm = T, type = 1)[["75%"]],
       max = max(date, na.rm = T),
       nr_missing = sum(is.na(value)),
-      nr_failed_to_parse = sum(date_status == "Parse failure", na.rm = T),
+      nr_failed_to_parse = sum(date_status == "Parse failed.", na.rm = T),
       prop_missing_or_fail = round(sum(is.na(date)) / n(), digits = 3)
     )
-        
-    df_category <-
-      df %>%
-      mutate(
-        day = mday(date),
-        month = month(date),
-        year = year(date),
-        day_of_week = wday(date)
-      ) %>%
-      select(-date, -date_status, -value) %>%
-      pivot_longer(
-        cols = day:day_of_week,
-        names_to = "unit_of_time",
-        values_to = "value"
-      ) %>%
-      count(variable, unit_of_time, value, name = "nr") %>%
-      group_by(variable, unit_of_time) %>%
-      mutate(percent = nr / sum(nr)) %>%
-      ungroup()
 }
 
-
-
-a<-afc_uc_table_list[[3]] %>% select(DATE_CREATED) %>%
-  pivot_longer(
-    cols = everything(), names_to = "variable", values_to = "value"
-  ) %>%
-  mutate(
-    date = as_date(mdy_hm(value)),
-    date_status =
-      case_when(
-        is.na(value) ~ NA,
-        is.na(mdy_hm(value)) ~ "Parse failure",
-        !is.na(mdy_hm(value)) ~ "Parse success")
+df_dates_num <-
+  map(
+    df_dates_std_long,
+    function(df) {
+      if (ncol(df) != 0) {
+        df <- describe_columns_num(df)
+      } else {
+        return(df %>% filter(F))
+      }
+    }
   )
 
-df_num <-
-  a %>%
-  group_by(variable) %>%
-  summarise(
-    min = min(date, na.rm = T),
-    p25 = quantile(date, probs = 0.25, na.rm = T, type = 1)[["25%"]],
-    median = median(date, na.rm = T),
-    p75 = quantile(date, probs = 0.75, na.rm = T, type = 1)[["75%"]],
-    max = max(date, na.rm = T),
-    nr_missing = sum(is.na(value)),
-    nr_failed_to_parse = sum(date_status == "Parse failure", na.rm = T),
-    prop_missing_or_fail = round(sum(is.na(date)) / n(), digits = 3)
+describe_columns_category <- function(df) {
+  df %>%
+    mutate(
+      day = mday(date),
+      month = month(date),
+      year = year(date),
+      day_of_week = wday(date),
+      hour = hour(round_date(date, unit = "hour"))
+    ) %>%
+    select(-date, -date_status, -value) %>%
+    pivot_longer(
+      cols = day:hour,
+      names_to = "unit_of_time",
+      values_to = "value"
+    ) %>%
+    count(variable, unit_of_time, value, name = "nr") %>%
+    group_by(variable, unit_of_time) %>%
+    mutate(percent = nr / sum(nr)) %>%
+    ungroup()
+}
+
+df_dates_category <-
+  map(
+    df_dates_std_long,
+    function(df) {
+      if (ncol(df) != 0) {
+        df <- describe_columns_category(df)
+      } else {
+        return(df %>% filter(F))
+      }
+    }
   )
 
-df_category <-
-  a %>%
-  mutate(
-    day = mday(date),
-    month = month(date),
-    year = year(date),
-    day_of_week = wday(date)
-  ) %>%
-  select(-date, -date_status, -value) %>%
-  pivot_longer(
-    cols = day:day_of_week,
-    names_to = "unit_of_time",
-    values_to = "value"
-  ) %>%
-  count(variable, unit_of_time, value, name = "nr") %>%
-  group_by(variable, unit_of_time) %>%
-  mutate(prop = round(nr / sum(nr), digits = 3)) %>%
-  ungroup()
+#################################################################
+##             Make sure every column was captured             ##
+#################################################################
+check <-
+  pmap(
+    list(afc_uc_table_list, df_c_l, df_dates_num, df_id, df_n),
+    function(df, cl, date, id, n) {
+      nr_vars <- length(colnames(df))
+      nr_analyzed <-
+        length(unique(cl$variable)) +
+        length(unique(date$variable)) +
+        length(unique(id$variable)) +
+        length(unique(n$variable))
+      return(list(nr_vars = nr_vars, nr_analyzed = nr_analyzed))
+    }
+  )
 
+# Everything works.
+# Figure out how to deal with all 100 warning messages and what not.
 
 # Write out results
 pwalk(
@@ -307,7 +384,4 @@ pwalk(
   }
 )
 
-# date and time columns
-# hms::is_hms(afc_uc_table_list[[6]]$TIME_NOTIFIED)
 # map(afc_uc_table_list, spec)
-# return empty data frames with column names?
