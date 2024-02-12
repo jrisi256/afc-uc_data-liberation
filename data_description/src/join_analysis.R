@@ -2,13 +2,14 @@ library(here)
 library(dplyr)
 library(readr)
 library(purrr)
+library(tidyr)
+library(stringr)
+library(ggplot2)
+library(ComplexUpset)
 
 ##################################################################
 ##                         Read in data                         ##
 ##################################################################
-
-# import sas var1 var2 var3 using "data.sas7bdat", rowrange(1:1000)
-# import sas using "data.sas7bdat", rowrange(1:1000)
 input_data_dir <- here("data_description", "input")
 table_names <- str_replace(list.files(input_data_dir), ".csv", "")
 table_paths <- list.files(input_data_dir, full.names = T)
@@ -27,8 +28,7 @@ sir_event_table <-
   read_csv(
     file.path(input_data_dir, "UAC_SIR_EVENT_DATA_TABLE.csv"),
     col_types = list(TIME_OF_EVENT = "c")
-  ) %>%
-  mutate(TIME_OF_EVENT_parse = parse_time(TIME_OF_EVENT, format = ""))
+  )
 
 afc_uc_table_list <- append(afc_uc_table_list, list(sir_event_table))
 names(afc_uc_table_list)[20] <- "UAC_SIR_EVENT_DATA_TABLE"
@@ -44,71 +44,108 @@ afc_uc_table_list_ids <-
     }
   )
 
-test <-
+# Which tables have which IDs?
+tables_have_which_keys <-
   pmap_dfr(
     list(afc_uc_table_list_ids, names(afc_uc_table_list_ids)),
     function(df, table_name) {
       df %>%
+        # Only need 1 row
         slice(1) %>%
+        # For each ID column, change value to True
         mutate(across(everything(), function(col) {col = T})) %>%
+        # Add the table name as a column
         mutate(table = table_name) %>%
         relocate(table)
     }
   ) %>%
+  # For each ID column, if it is missing change it to false
   mutate(across(where(is.logical), function(col) {if_else(is.na(col), F, col)}))
 
-test2 <-
+# Which keys are in which tables?
+keys_in_which_table <-
   map(
-    select(test, -table),
-    function(col) {
-      test %>% filter({{ col }}) %>% pull(table)
-    }
+    # For each ID
+    select(tables_have_which_keys, -table),
+    # Count the number of tables it appears in
+    function(df, col) {df %>% filter({{ col }}) %>% pull(table)},
+    df = tables_have_which_keys
   )
 
-keep <- unlist(map(test2, function(x) length(x)))
-keep <- keep[keep > 1]
-keep <- as.list(names(keep))
+# Keep only those IDs which appear in more than one table.
+keep_ids <- unlist(map(keys_in_which_table, function(x) length(x)))
+keep_ids <- keep_ids[keep_ids > 1]
+keep_ids <- as.list(names(keep_ids))
 
-test3 <-
+distinct_ids_in_each_table <-
+  # For each ID variable that is in more than one table
   pmap(
-    list(test2[unlist(keep)], keep),
-    function(table_names, col_name) {
+    list(
+      keys_in_which_table[unlist(keep_ids)],
+      keep_ids,
+      list(afc_uc_table_list_ids)
+    ),
+    # For each table (that has the current ID variable)
+    function(table_names, col_name, raw_tables) {
       pmap(
-        list(afc_uc_table_list_ids[table_names], as.list(table_names)),
-        function(df, table_name) {
+        list(
+          raw_tables[table_names],
+          as.list(table_names),
+          col_name
+        ),
+        function(df, table_name, id_col) {
+          # Keep all distinct values of the ID variable and make table long
           df %>%
-            select(all_of(col_name)) %>%
+            select(all_of(id_col)) %>%
             mutate(source = table_name, in_table = T) %>%
-            distinct(.data[[col_name]], .keep_all = T) %>%
+            distinct(.data[[id_col]], .keep_all = T) %>%
             pivot_wider(names_from = source, values_from = in_table)
         }
       ) %>%
-        reduce(function(df1, df2) {
-          full_join(df1, df2, by = col_name)
-        }) %>%
+        # Join together all tables which contain same ID variable to see which
+        # values of that ID appear in which table.
+        reduce(function(df1, df2) {full_join(df1, df2, by = col_name)}) %>%
         mutate(across(everything(), ~ if_else(is.na(.x), F, .x)))
     }
   )
 
+upset_plots <-
+  pmap(
+    list(distinct_ids_in_each_table, names(distinct_ids_in_each_table)),
+    function(df, id_name) {
+      # Drop the distinct column IDs
+      columns <- colnames(df)[2:ncol(df)]
+      
+      # Create an upset plot
+      upset(
+        df,
+        columns,
+        name = "Tables",
+        width_ratio = 0.1,
+        wrap = T,
+        set_sizes=(
+          upset_set_size() +
+            theme(
+              axis.text.x = element_text(angle = 90, size = 7),
+              axis.title.x = element_text(size = 6)
+            )
+        )
+      ) +
+        ggtitle(id_name)
+    }
+)
+
 pmap(
-  list(test3[8], names(test3[8])),
-  function(df, key_name) {
-    columns <- colnames(df)[2:ncol(df)]
-    
-    upset(
-      df,
-      columns,
-      name = "Tables",
-      width_ratio = 0.1,
-      wrap = T,
-      set_sizes=(
-        upset_set_size() +
-          theme(
-            axis.text.x = element_text(angle = 90, size = 7),
-            axis.title.x = element_text(size = 6)
-          )
+  list(upset_plots, names(upset_plots)),
+  function(plot, file_name) {
+    ggsave(
+      filename = paste0(file_name, ".png"),
+      plot = plot,
+      device = "png",
+      path = here("data_description", "output"),
+      width = 18,
+      height = 8,
+      units = "in"
       )
-    ) +
-      ggtitle(key_name)
   }
 )

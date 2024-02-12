@@ -4,6 +4,7 @@ library(readr)
 library(purrr)
 library(tidyr)
 library(stringr)
+library(flextable)
 library(lubridate)
 
 ##################################################################
@@ -30,7 +31,7 @@ sir_event_table <-
   )
 
 afc_uc_table_list <- append(afc_uc_table_list, list(sir_event_table))
-names(afc_uc_table_list)[20] <- "UAC_SIR_EVENT_DATA_TABL"
+names(afc_uc_table_list)[20] <- "UAC_SIR_EVENT_DATA_TABLE"
 
 # Change some of the column types from numeric to character.
 afc_uc_table_list$UAC_SIR_CATEGORY_DATA_TABLE <-
@@ -49,41 +50,32 @@ afc_uc_table_list$UAC_SIR_FOLLOWUP_RPT_DATA_TABLE <-
 ##  Create descriptive tables for character and logical columns.  ##
 ####################################################################
 describe_columns_c_l <-
-  function(df, order = "large", cut = "max", nmax = 5, nmin = 5, cum_sum = NA) {
+  function(df, cut = "max", nmax = 5, nmin = 5) {
     df <-
       df %>%
+      # Convert data from wide to long
       pivot_longer(
         cols = everything(),
         names_to = "variable",
         values_to = "value",
         values_transform = as.character
       ) %>%
+      # Count the number of times each value of a variable appears
       count(variable, value, name = "nr") %>%
       group_by(variable) %>%
       mutate(
-        percent = nr / sum(nr),
+        prop = nr / sum(nr),
         nr_unique = length(unique(value))
       )
 
-    if (order == "large") {
-      df <- df %>% arrange(desc(nr), .by_group = T)
-    } else if (order == "small") {
-      df <- df %>% arrange(nr, .by_group = T)
-    }
-
-    df <- df %>% mutate(cumulative_percent = cumsum(percent))
-
-    if (!is.na(cum_sum)) {
-      df <- df %>% filter(cumlative_percent <= cum_sum)
-    } else if (cut == "max") {
-      df <-
-        df %>%
-        slice_max(nr, n = nmax, with_ties = F)
+    # Return largest, smallest, or both largest and smallest values
+    if (cut == "max") {
+      df <- df %>% slice_max(nr, n = nmax, with_ties = F)
     } else if (cut == "min") {
-      df <- df %>% slice_min(nr, n = nmin)
+      df <- df %>% slice_min(nr, n = nmin, with_ties = F)
     } else if (cut == "min_max") {
-      df_max <- df %>% slice_max(nr, n = nmax)
-      df_min <- df %>% slice_min(nr, n = nmin)
+      df_max <- df %>% slice_max(nr, n = nmax, with_ties = F)
+      df_min <- df %>% slice_min(nr, n = nmin, with_ties = F)
       df <- bind_rows(df_max, df_min) %>% arrange(variable)
     }
 
@@ -119,6 +111,7 @@ describe_columns_id <-
   function(df) {
     df <-
       df %>%
+      # Convert data from wide to long
       pivot_longer(
         cols = everything(),
         names_to = "variable",
@@ -126,6 +119,7 @@ describe_columns_id <-
         values_transform = as.character
       ) %>%
       group_by(variable) %>%
+      # Count number of unique values for the ID and number missing
       summarise(
         nr_rows = n(),
         nr_unique = length(unique(value)),
@@ -156,10 +150,12 @@ describe_columns_n <-
   function(df) {
     df <-
       df %>%
+      # Convert data from wide to long
       pivot_longer(
         cols = everything(), names_to = "variable", values_to = "value"
       ) %>%
       group_by(variable) %>%
+      # Describe distribution of data
       summarise(
         mean = round(mean(value, na.rm = T), digits = 3),
         sd = round(sd(value, na.rm = T), digits = 3),
@@ -254,15 +250,16 @@ standardize_long_dates <- function(df, table_name) {
       select(-DATE_STATE_REPORT, -TIME_STATE_REPORT)
   }
 
-  ######################## Make the date and time columns long.
   df <-
     df %>%
+    ######################## Make the date and time columns long.
     pivot_longer(
       cols = everything(),
       names_to = "variable",
       values_to = "value",
       values_transform = as.character
     ) %>%
+    # The specific variable will dictate how to parse the date/date time.
     mutate(
       date =
         case_when(
@@ -271,6 +268,7 @@ standardize_long_dates <- function(df, table_name) {
           str_detect(variable, "DATE_CREATED") & table_name == "PROGRAM_LEVEL_EVENTS_INFO_DATA_TABLE" ~ ymd_hms(value),
           str_detect(variable, "DATE") ~ parse_date_time(value, "%m/%d/%y %H:%M", exact = T)
         ),
+      # Was the date missing or was it not able to be parsed?
       date_status =
         case_when(
           is.na(value) ~ NA_character_,
@@ -296,6 +294,7 @@ df_dates_std_long <-
     }
   )
 
+# Describe date and date time variables as if they were numbers.
 describe_columns_num <- function(df) {
   df %>%
     group_by(variable) %>%
@@ -325,6 +324,7 @@ df_dates_num <-
 
 describe_columns_category <- function(df) {
   df %>%
+    # Describe the days, month, year, days of week, and hour of day.
     mutate(
       day = mday(date),
       month = month(date),
@@ -333,14 +333,16 @@ describe_columns_category <- function(df) {
       hour = hour(round_date(date, unit = "hour"))
     ) %>%
     select(-date, -date_status, -value) %>%
+    # Convert data from wide to long.
     pivot_longer(
       cols = day:hour,
       names_to = "unit_of_time",
       values_to = "value"
     ) %>%
+    # Count number of times an observation happens during each period of time.
     count(variable, unit_of_time, value, name = "nr") %>%
     group_by(variable, unit_of_time) %>%
-    mutate(percent = nr / sum(nr)) %>%
+    mutate(prop = nr / sum(nr)) %>%
     ungroup()
 }
 
@@ -373,15 +375,56 @@ check <-
     }
   )
 
-# Everything works.
-# Figure out how to deal with all 100 warning messages and what not.
-
-# Write out results
-pwalk(
-  list(df_c_l, names(df_c_l)),
-  function(df, file_name) {
-    write_csv(df, here(paste0(file_name, "_codebook.csv")))
-  }
+#################################################################
+##                      Write out results                      ##
+#################################################################
+set_flextable_defaults(
+  digits = 3, font.size = 6, theme_fun = theme_vanilla, na_str = "<na>"
 )
 
-# map(afc_uc_table_list, spec)
+pmap(
+  list(df_c_l, df_id, df_n, df_dates_num, df_dates_category, names(df_c_l)),
+  function(c_l, id, n, date_num, date_cat, tbl_name) {
+    # If any of the data frames are empty, say so.
+    if(ncol(c_l) == 0) {
+      c_l <- tibble(col = "No categorical variables.")
+    }
+    
+    if(ncol(id) == 0) {
+      id <- tibble(col = "No ID variables.")
+    }
+    
+    if(ncol(n) == 0) {
+      n <- tibble(col = "No numerical variables.")
+    }
+    
+    if(ncol(date_num) == 0) {
+      date_num <- tibble(col = "No date variables.")
+      date_cat <- tibble(col = "No date variables.")
+    }
+    
+    # Convert each data frame into flextable objects.
+    flextables <-
+      map(
+        list(
+          "Categorical variables" = c_l, 
+          "ID variables" = id, 
+          "Numerical variables" = n, 
+          "Date variables (numeric)" = date_num, 
+          "Date variables (categorical)" = date_cat
+        ),
+        function(df) {
+          df %>%
+            qflextable() %>%
+            set_table_properties(layout = "autofit", width = 1) %>%
+            colformat_double()
+        }
+      )
+    
+    # Save all the flextables.
+    save_as_docx(
+      values = flextables,
+      path = here("data_description", "output", paste0(tbl_name, ".docx"))
+    )
+  }
+)
