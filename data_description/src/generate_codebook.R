@@ -3,6 +3,7 @@ library(dplyr)
 library(readr)
 library(purrr)
 library(tidyr)
+library(readxl)
 library(stringr)
 library(flextable)
 library(lubridate)
@@ -15,15 +16,17 @@ table_names <- str_replace(list.files(input_data_dir), ".csv", "")
 table_paths <- list.files(input_data_dir, full.names = T)
 
 # Readr's parser incorrectly guesses some of the column types. Must do manually.
-table_names <- table_names[-c(15)]
-table_paths <- table_paths[-c(15)]
+# Also remove sub-folder for UAC_SIR_NEW_DATA_TABLE.
+table_names <- table_names[!str_detect(table_names, "UAC_SIR_EVENT_DATA_TABLE|august_2024")]
+table_paths <- table_paths[!str_detect(table_paths, "UAC_SIR_EVENT_DATA_TABLE|august_2024")]
 
 # Increase the number of lines the parser reads to guess the column's data type.
 # UAC_SIR_FOLLOWUP_RPT_DATA_TABLE is the problematic table in this regard.
 afc_uc_table_list <- map(table_paths, read_csv, guess_max = 2000)
 names(afc_uc_table_list) <- table_names
+afc_uc_table_list <- afc_uc_table_list %>% map(function(df) {df %>% select(-matches("...1"))})
 
-# Add manual table
+# Add table manually.
 sir_event_table <-
   read_csv(
     file.path(input_data_dir, "UAC_SIR_EVENT_DATA_TABLE.csv"),
@@ -31,7 +34,7 @@ sir_event_table <-
   )
 
 afc_uc_table_list <- append(afc_uc_table_list, list(sir_event_table))
-names(afc_uc_table_list)[20] <- "UAC_SIR_EVENT_DATA_TABLE"
+names(afc_uc_table_list)[length(afc_uc_table_list)] <- "UAC_SIR_EVENT_DATA_TABLE"
 
 # Change some of the column types from numeric to character.
 afc_uc_table_list$UAC_SIR_CATEGORY_DATA_TABLE <-
@@ -45,6 +48,19 @@ afc_uc_table_list$UAC_SIR_FOLLOWUP_RPT_DATA_TABLE <-
     CARE_PROVIDER_NAME = as.character(CARE_PROVIDER_NAME),
     CARE_PROVIDER_STATE = as.character(CARE_PROVIDER_STATE)
   )
+
+# Read in the sub-tables from 2024 and turn them into 1 table.
+sub_table_paths <- list.files(here(input_data_dir, "august_2024"), full.names = T)
+sub_tables <- map(sub_table_paths, read_excel, guess_max = 63925)
+sir_new <-
+  sub_tables %>%
+  map(function(df) {
+    df %>% mutate(across(matches("DATE"), function(col) {as.character(col)}))
+  }) %>%
+  bind_rows()
+
+afc_uc_table_list <- append(afc_uc_table_list, list(sir_new))
+names(afc_uc_table_list)[length(afc_uc_table_list)] <- "UAC_SIR_NEW_DATA_TABLE"
 
 ####################################################################
 ##  Create descriptive tables for character and logical columns.  ##
@@ -82,7 +98,7 @@ describe_columns_c_l <-
     df <- df %>% ungroup()
   }
 
-# Summarize character and logical columns
+# Summarize character and logical columns.
 df_c_l <-
   map(
     afc_uc_table_list,
@@ -90,10 +106,22 @@ df_c_l <-
       df <-
         df %>%
         select(
-          (where(is.character) |
+          (
+            where(is.character) |
             where(is.logical) |
-            where(~ all(.x == 0 | .x == 1 | .x == 2, na.rm = T))) &
-            !(matches("_ID|CASE.*NUMBER|TIME|DATE_|_DATE$"))
+            # Every numeric column is really a categorical variable (so few unique numbers).
+            # Or they could be numerical variables, but it's very hard to discern (e.g. Key Indicator Table).
+            (where(is.numeric) & !matches("FILE_SIZE"))
+          ) &
+          (
+            !(matches("_ID$|CASE.*NUMBER|TIME|DATE_|_DATE$|\\sId$|\\sDate$")) |
+            # All these date and time columns are garbage and cannot be parsed as dates or time.
+            (matches("DATE_REPORTED_TO_CARE_PROVIDER|DATE_REPORTED_TO_ORR")) |
+            (matches("DATE_OF_STATE_LIC_REPORT|DATE_NOTIFY_STATE_INCI_INVEST")) |
+            (matches("DATE_REPORTED_TO_CPS|DATE_NOTIFY_CPS_INC_INVEST")) |
+            (matches("DATE_REPORT_TO_LAW_ENFORCE|DATE_NOTIFY_LE_INC_INVEST")) |
+            (matches("DATE_REPORTED_TO_DOJ|Completion Time|Response Time"))
+          )
         )
 
       if (ncol(df) != 0) {
@@ -133,7 +161,7 @@ df_id <-
   map(
     afc_uc_table_list,
     function(df) {
-      df <- df %>% select((matches("_ID|CASE.*NUMBER")))
+      df <- df %>% select((matches("_ID$|CASE.*NUMBER|\\sId$")))
 
       if (ncol(df) != 0) {
         df <- describe_columns_id(df)
@@ -179,13 +207,7 @@ df_n <-
   map(
     afc_uc_table_list,
     function(df) {
-      df <-
-        df %>%
-        select(
-          (where(is.numeric) &
-            where(~ any(.x != 0 & .x != 1 & .x != 2, na.rm = T))) &
-            !(matches("_ID|CASE_NUMBER"))
-        )
+      df <- df %>% select(matches("FILE_SIZE"))
 
       if (ncol(df) != 0) {
         df <- describe_columns_n(df)
@@ -265,7 +287,8 @@ standardize_long_dates <- function(df, table_name) {
         case_when(
           is.na(value) ~ NA_Date_,
           str_detect(variable, "DATE_CONTACT|TIME") ~ ymd_hms(value),
-          str_detect(variable, "DATE_CREATED") & table_name == "PROGRAM_LEVEL_EVENTS_INFO_DATA_TABLE" ~ ymd_hms(value),
+          str_detect(variable, "\\sDate$") ~ ymd(value),
+          str_detect(variable, "DATE_CREATED") & table_name %in% c("PROGRAM_LEVEL_EVENTS_INFO_DATA_TABLE", "UAC_SIR_NEW_DATA_TABLE") ~ ymd_hms(value),
           str_detect(variable, "DATE") ~ parse_date_time(value, "%m/%d/%y %H:%M", exact = T)
         ),
       # Was the date missing or was it not able to be parsed?
@@ -284,7 +307,14 @@ df_dates_std_long <-
     function(df, table_name) {
       df <-
         df %>%
-        select(matches("TIME|DATE_|_DATE$"))
+        select(
+          matches("TIME|DATE_|_DATE$|\\sDate$") &
+          !(matches("DATE_REPORTED_TO_CARE_PROVIDER|DATE_REPORTED_TO_ORR")) &
+          !(matches("DATE_OF_STATE_LIC_REPORT|DATE_NOTIFY_STATE_INCI_INVEST")) &
+          !(matches("DATE_REPORTED_TO_CPS|DATE_NOTIFY_CPS_INC_INVEST")) &
+          !(matches("DATE_REPORT_TO_LAW_ENFORCE|DATE_NOTIFY_LE_INC_INVEST")) &
+          !(matches("DATE_REPORTED_TO_DOJ|Completion Time|Response Time"))
+        )
 
       if (ncol(df) != 0) {
         df <- standardize_long_dates(df, table_name)
@@ -366,6 +396,10 @@ check <-
     list(afc_uc_table_list, df_c_l, df_dates_num, df_id, df_n),
     function(df, cl, date, id, n) {
       nr_vars <- length(colnames(df))
+      # LIST_SIR_NOTIFIED_ENTITIES_DATA_TABLE is completely empty so it will not match.
+      # ORR_NOTIFICATION_DATA_TABLE had two columns combined into one (date + time).
+      # PROGRAM_LEVEL_EVENTS_INFO_DATA_TABLE had 6 columns combined into three (date + time).
+      # UAC_SIR_EVENT_DATA_TABLE had two columsn combined into one (date + time).
       nr_analyzed <-
         length(unique(cl$variable)) +
         length(unique(date$variable)) +

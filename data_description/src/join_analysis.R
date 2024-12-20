@@ -3,6 +3,7 @@ library(dplyr)
 library(readr)
 library(purrr)
 library(tidyr)
+library(readxl)
 library(stringr)
 library(ggplot2)
 library(ComplexUpset)
@@ -15,15 +16,17 @@ table_names <- str_replace(list.files(input_data_dir), ".csv", "")
 table_paths <- list.files(input_data_dir, full.names = T)
 
 # Readr's parser incorrectly guesses some of the column types. Must do manually.
-table_names <- table_names[-c(15)]
-table_paths <- table_paths[-c(15)]
+# Also remove sub-folder for UAC_SIR_NEW_DATA_TABLE.
+table_names <- table_names[!str_detect(table_names, "UAC_SIR_EVENT_DATA_TABLE|august_2024")]
+table_paths <- table_paths[!str_detect(table_paths, "UAC_SIR_EVENT_DATA_TABLE|august_2024")]
 
 # Increase the number of lines the parser reads to guess the column's data type.
 # UAC_SIR_FOLLOWUP_RPT_DATA_TABLE is the problematic table in this regard.
 afc_uc_table_list <- map(table_paths, read_csv, guess_max = 2000)
 names(afc_uc_table_list) <- table_names
+afc_uc_table_list <- afc_uc_table_list %>% map(function(df) {df %>% select(-matches("...1"))})
 
-# Add manual table
+# Add table manually.
 sir_event_table <-
   read_csv(
     file.path(input_data_dir, "UAC_SIR_EVENT_DATA_TABLE.csv"),
@@ -31,7 +34,33 @@ sir_event_table <-
   )
 
 afc_uc_table_list <- append(afc_uc_table_list, list(sir_event_table))
-names(afc_uc_table_list)[20] <- "UAC_SIR_EVENT_DATA_TABLE"
+names(afc_uc_table_list)[length(afc_uc_table_list)] <- "UAC_SIR_EVENT_DATA_TABLE"
+
+# Change some of the column types from numeric to character.
+afc_uc_table_list$UAC_SIR_CATEGORY_DATA_TABLE <-
+  afc_uc_table_list$UAC_SIR_CATEGORY_DATA_TABLE %>%
+  mutate(DESCRIPTION_ORDER = as.character(DESCRIPTION_ORDER))
+
+afc_uc_table_list$UAC_SIR_FOLLOWUP_RPT_DATA_TABLE <-
+  afc_uc_table_list$UAC_SIR_FOLLOWUP_RPT_DATA_TABLE %>%
+  mutate(
+    CARE_PROVIDER_CITY = as.character(CARE_PROVIDER_CITY),
+    CARE_PROVIDER_NAME = as.character(CARE_PROVIDER_NAME),
+    CARE_PROVIDER_STATE = as.character(CARE_PROVIDER_STATE)
+  )
+
+# Read in the sub-tables from 2024 and turn them into 1 table.
+sub_table_paths <- list.files(here(input_data_dir, "august_2024"), full.names = T)
+sub_tables <- map(sub_table_paths, read_excel, guess_max = 63925)
+sir_new <-
+  sub_tables %>%
+  map(function(df) {
+    df %>% mutate(across(matches("DATE"), function(col) {as.character(col)}))
+  }) %>%
+  bind_rows()
+
+afc_uc_table_list <- append(afc_uc_table_list, list(sir_new))
+names(afc_uc_table_list)[length(afc_uc_table_list)] <- "UAC_SIR_NEW_DATA_TABLE"
 
 #################################################################
 ##                   Analyze overlap in IDs.                   ##
@@ -40,7 +69,7 @@ afc_uc_table_list_ids <-
   map(
     afc_uc_table_list,
     function(df) {
-      df <- df %>% select((matches("_ID|CASE.*NUMBER")))
+      df <- df %>% select((matches("_ID|CASE.*NUMBER|\\sId$")))
     }
   )
 
@@ -99,19 +128,21 @@ distinct_ids_in_each_table <-
             select(all_of(id_col)) %>%
             mutate(source = table_name, in_table = T) %>%
             distinct(.data[[id_col]], .keep_all = T) %>%
+            # Drop missing values of ID.
+            filter(!is.na(.data[[id_col]])) %>%
             pivot_wider(names_from = source, values_from = in_table)
         }
       ) %>%
         # Join together all tables which contain same ID variable to see which
         # values of that ID appear in which table.
         reduce(function(df1, df2) {full_join(df1, df2, by = col_name)}) %>%
-        mutate(across(everything(), ~ if_else(is.na(.x), F, .x)))
+        mutate(across(!matches("_ID|CASE.*NUMBER|\\sId$"), ~ if_else(is.na(.x), F, .x)))
     }
   )
 
 upset_plots <-
   pmap(
-    list(distinct_ids_in_each_table, names(distinct_ids_in_each_table)),
+    list(distinct_ids_in_each_table[11:16], names(distinct_ids_in_each_table)[11:16]),
     function(df, id_name) {
       # Drop the distinct column IDs
       columns <- colnames(df)[2:ncol(df)]
